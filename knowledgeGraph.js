@@ -3,14 +3,17 @@
 // @namespace   Chen Chunyang
 // @require     http://d3js.org/d3.v3.min.js
 // @require     https://code.jquery.com/jquery-2.1.4.min.js
+// @require     http://labratrevenge.com/d3-tip/javascripts/d3.tip.v0.6.3.js
+// @resource kg_css  https://graphofknowledge.appspot.com/dist/plugin.css
 // @include     https://www.google.com*
-// @version     1
-// @grant       none
+// @version     3.0
+// @grant    GM_addStyle
+// @grant    GM_getResourceText
 // ==/UserScript==
 
+var kg_cssSrc = GM_getResourceText ("kg_css");     //add external css file for tip event       
+GM_addStyle (kg_cssSrc);
 
-//The alternative ones is to use jquery waitForKeyElements https://gist.github.com/raw/2625891/waitForKeyElements.js
-//The code is modified from one answer in http://stackoverflow.com/questions/18989345/how-do-i-reload-a-greasemonkey-script-when-ajax-changes-the-url-without-reloadin
 var fireOnHashChangesToo    = true;
 var pageURLCheckTimer       = setInterval (
     function () {
@@ -44,26 +47,20 @@ function gmMain () {
     var input = document.getElementById("lst-ib").value.toLowerCase();                //Get the content in the search bar as the tag (lowercase and replace blank)
     if (input.split(" ").length<6)                                                    // no more than 5 spaces in the input
     {
-        var xmlHttp = new XMLHttpRequest();
-        
+       
         //Get graph content
         console.log(input.replace(/#/g,"+++").replace(/ /g,"&&"));                    //"replace" method can only replace the first occurrence, so we use regex here
-        xmlHttp.open( "GET", "https://graphofknowledge.appspot.com/tagidjson/"+input.replace("#","+++").replace(/ /g,"&&"), false );
-        xmlHttp.send();
-        var tag = xmlHttp.responseText.split("&&")[0];                         //the tag
-        var graphResult = xmlHttp.responseText.split("&&")[1];                 //the kg graph
+        var result = $.ajax({type: "GET", url: "https://graphofknowledge.appspot.com/tagidjson/"+input.replace("#","+++").replace(/ /g,"&&"), async: false}).responseText;
+        var tag = result.split("&&")[0];                         //the tag
+        var graphResult = result.split("&&")[1];                 //the kg
         
         
-        
-        //Get tagWiki content
-        var wikiUrl = "https://api.stackexchange.com/2.2/tags/"+tag.replace(/#/g,"%23")+"/wikis?site=stackoverflow";
-        xmlHttp.open( "GET", wikiUrl, false );
-        xmlHttp.send();
-        var wikiResult = xmlHttp.responseText;
+       //Get tagWiki content
+        var wikiResult = JSON.parse($.ajax({type: "GET", url: "https://api.stackexchange.com/2.2/tags/"+tag.split("_").pop().replace(/#/g,"%23")+"/wikis?site=stackoverflow", async: false}).responseText);
 
 
 
-        if (JSON.parse(wikiResult)["items"].length != 0 && graphResult != ""  )  //no wiki data or no graph data
+        if (wikiResult["items"].length != 0 && graphResult != ""  )  //no wiki data or no graph data
         {
 
             var baseHeight = 120 + $('#rhs').height();          //Align our answer panle behind Google's direct answer or ads. Google's navigation bar height = 120
@@ -71,14 +68,19 @@ function gmMain () {
             //Insert tagWiki into the Google search pape
             var wikiPosition = document.createElement("p");
             wikiPosition.id = "wiki";  
-            wikiPosition.appendChild(document.createTextNode(jQuery('<p>' + JSON.parse(wikiResult)["items"][0]["excerpt"] + '</p>').text()));    //jQuery(wiki).text() is to convert HTML to string.
+            wikiPosition.appendChild(document.createTextNode(jQuery('<p>' + wikiResult["items"][0]["excerpt"] + '</p>').text()));    //jQuery(wiki).text() is to convert HTML to string.
             wikiPosition.setAttribute("style", "font-size:16px;position:absolute;top:"+baseHeight+"px;left:700px;width: 500px;");
             document.body.appendChild(wikiPosition);
             var wikiHeight = $('#wiki').height();                   //the height of wiki paragraph
 
             //Insert a link to our own website
             var linkPosition = document.createElement("p");
-            linkURL = "https://graphofknowledge.appspot.com/tagid/" +tag.replace(/#/g,"+++");
+            linkURL = "";
+            //Direct to techGraph or techTask pages
+            if (tag.indexOf("_") == -1)
+               {linkURL = "https://graphofknowledge.appspot.com/tagid/" +tag.replace(/#/g,"+++");}
+            else
+               {linkURL = "https://graphofknowledge.appspot.com/techtask/" +tag.replace(/#/g,"+++").replace("_","&");}
             linkPosition.innerHTML = "Refer to <a href = \""+linkURL+"\">" + linkURL + "</a>" ;
             //linkPosition.appendChild();
             linkPosition.setAttribute("style", "font-size:15px;position:absolute;top:"+(baseHeight+wikiHeight+10)+"px;left:700px;");
@@ -99,13 +101,6 @@ function gmMain () {
         }
     }
 }
-
-//Only for debugging if we get the input
-function showAlert()
-{
-    alert(document.getElementById("lst-ib").value);
-}
-
 
 
 //Draw knowledge graph
@@ -150,11 +145,21 @@ var force = d3.layout.force()
 	  .linkDistance(distance)
     .size([width, height]);
 
-	
+//Set up tooltip
+var tip = d3.tip()
+    .attr('class', 'd3-tip')
+    .offset([-3, 0])
+    .html(function (d) {
+	var xmlHttp = new XMLHttpRequest();
+	xmlHttp.open( "GET", "https://api.stackexchange.com/2.2/tags/"+d.name.replace("#","%23")+"/wikis?site=stackoverflow&key=IQXyZwA1rHRM4rguoGZ)xQ((", false );
+    xmlHttp.send();
+	return  JSON.parse(xmlHttp.responseText)["items"][0]["excerpt"].split(". ")[0] + ".</span>";
+})
+svg.call(tip);	
+    
+    
 var json = featureContent;
-	
-	
-  //json = JSON.parse(jsondata)
+
 	
   force
 	  //.alpha(10)
@@ -174,11 +179,12 @@ var json = featureContent;
 	    .enter().append("g")
       .attr("class", "node")
       .call(force.drag)
-	    //.on('mousedown', tip.show)  
-      //.on('mouseup', tip.hide)  //.on('mouseleave', tip.hide)
-      .on('mouseover', connectedNodes)
+	    .on('dblclick', reDirect)
+	    .on('mouseover', connectedNodes)
 	    .on('mouseout', allNodes)
-	    .on('dblclick', reDirect);
+	    .on('contextmenu', function(d){d3.event.preventDefault();tip.show(d);}) 
+      .on('mouseleave', tip.hide) 
+	  ;
 
   node.append("circle")
     .attr("r", function(d) { return d.degree;})
